@@ -11,6 +11,7 @@ from .auth import (
     extract_bearer_token,
 )
 from .background import BackgroundTasks
+from .cors import allowed_origin, canonical_origin
 from .exceptions import HTTPException, abort
 from .globals import current_user, jsonify, redirect, request, session
 from .logging import FlasgoJSONFormatter, configure_logging
@@ -73,7 +74,9 @@ __all__ = [
     "WebSocketException",
     "WebSocketHandshakeError",
     "abort",
+    "allowed_origin",
     "bearer_token_backend",
+    "canonical_origin",
     "configure_logging",
     "create_template_environment",
     "current_user",

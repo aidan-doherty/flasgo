@@ -26,6 +26,14 @@ from .auth import (
     User,
     extract_bearer_token,
 )
+from .cors import (
+    allowed_origin,
+    apply_cors_headers,
+    build_cors_preflight_response,
+    canonical_origin,
+    is_cors_preflight,
+    requested_headers_allowed,
+)
 from .debug import Debug
 from .exceptions import HTTPException
 from .logging import configure_logging, log_event
@@ -767,6 +775,14 @@ class Flasgo:
     def _prepare_response(self, req: Request, response: Response) -> None:
         response.headers.setdefault("x-request-id", req.request_id)
         apply_security_headers(response, self.security)
+        cors_origin = req.scope.get("flasgo_cors_origin")
+        if isinstance(cors_origin, str) and cors_origin:
+            apply_cors_headers(
+                response,
+                allow_origin=cors_origin,
+                allow_credentials=self.settings.CORS_ALLOW_CREDENTIALS,
+                expose_headers=self.settings.CORS_EXPOSE_HEADERS,
+            )
         if self.security.csrf_enabled:
             ensure_csrf_cookie(req, response, self.security)
         self._persist_session(req, response)
@@ -829,6 +845,51 @@ class Flasgo:
             },
         )
 
+    def _handle_cors(self, req: Request) -> Response | None:
+        """Enforce the CORS allowlist and answer preflight requests when CORS is enabled.
+
+        CORS is disabled by default. When enabled it is deny-by-default: only origins
+        listed in ``CORS_ALLOWED_ORIGINS`` receive CORS response headers, and preflights
+        are rejected with ``403`` unless the requested method and headers are allowed.
+        """
+
+        if not self.settings.CORS_ENABLED:
+            return None
+        origin = req.headers.get("origin")
+        if not origin:
+            return None
+        allow_origin = allowed_origin(
+            origin,
+            allowed_origins=self.settings.CORS_ALLOWED_ORIGINS,
+            allow_credentials=self.settings.CORS_ALLOW_CREDENTIALS,
+        )
+        if is_cors_preflight(req):
+            requested_method = req.headers.get("access-control-request-method", "").upper()
+            if (
+                allow_origin is None
+                or requested_method not in self.settings.CORS_ALLOWED_METHODS
+                or not requested_headers_allowed(
+                    req.headers.get("access-control-request-headers"),
+                    allowed_headers=self.settings.CORS_ALLOWED_HEADERS,
+                )
+            ):
+                self._log_security_event(logging.WARNING, "cors-preflight-denied", req=req)
+                return Response.text(
+                    "Forbidden. The requested cross-origin request is not allowed by this server.",
+                    status_code=403,
+                )
+            req.scope["flasgo_cors_origin"] = allow_origin
+            return build_cors_preflight_response(
+                allow_methods=self.settings.CORS_ALLOWED_METHODS,
+                allow_headers=self.settings.CORS_ALLOWED_HEADERS,
+                allow_credentials=self.settings.CORS_ALLOW_CREDENTIALS,
+                max_age=self.settings.CORS_MAX_AGE,
+            )
+        if allow_origin is None:
+            return None
+        req.scope["flasgo_cors_origin"] = allow_origin
+        return None
+
     def openapi_spec(self) -> dict[str, Any]:
         """Return the cached OpenAPI document for the registered routes."""
 
@@ -890,6 +951,18 @@ class Flasgo:
                 raise ValueError("METRICS_BEARER_TOKEN must contain at least 32 characters when metrics are enabled.")
             if self.settings.METRICS_PATH in {self.settings.DOCS_PATH, self.settings.OPENAPI_PATH}:
                 raise ValueError("METRICS_PATH must not conflict with DOCS_PATH or OPENAPI_PATH.")
+        if self.settings.CORS_ENABLED:
+            for origin in self.settings.CORS_ALLOWED_ORIGINS:
+                if origin != "*" and canonical_origin(origin) is None:
+                    raise ValueError(
+                        "CORS_ALLOWED_ORIGINS entries must be exact http:// or https:// origins without paths."
+                    )
+            if "*" in self.settings.CORS_ALLOWED_ORIGINS and self.settings.CORS_ALLOW_CREDENTIALS:
+                raise ValueError("CORS_ALLOWED_ORIGINS must not include '*' when CORS_ALLOW_CREDENTIALS is enabled.")
+            if self.settings.CORS_MAX_AGE < 0:
+                raise ValueError("CORS_MAX_AGE must not be negative.")
+            if not self.settings.CORS_ALLOWED_METHODS:
+                raise ValueError("CORS_ALLOWED_METHODS must not be empty.")
 
     async def _dispatch(self, req: Request) -> Response:
         host_values = _scope_header_values(req.scope, b"host")
@@ -903,6 +976,11 @@ class Flasgo:
                 "Invalid Host header. Send a Host value in ALLOWED_HOSTS or update settings.ALLOWED_HOSTS.",
                 status_code=400,
             )
+
+        cors_response = self._handle_cors(req)
+        if cors_response is not None:
+            req.scope["route_template"] = "<cors-preflight>"
+            return cors_response
 
         if self.security.csrf_enabled and not csrf_is_valid(req, self.security):
             self._log_security_event(logging.WARNING, "csrf-check-failed", req=req)

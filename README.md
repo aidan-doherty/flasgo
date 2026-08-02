@@ -193,12 +193,38 @@ Put a reverse proxy/load balancer in front (Caddy, Cloudflare, etc.) for TLS ter
 - Request body/head limits and read timeouts in the built-in dev server.
 - Optional per-client throttling for repeated security failures (`429`).
 - Per-route rate limiting with `@app.ratelimit(...)` / `@rate_limit(...)`, using the ASGI client IP by default.
+- Optional cross-origin sharing with an exact-origin allowlist, deny-by-default preflights, and credential-safe handling (disabled by default).
 - Security event logging for host/CSRF/authz denials.
 - Same-origin WebSocket handshakes, pre-accept auth, bounded messages, and connection-level message throttling.
 - Locally generated request IDs by default; incoming IDs are ignored unless strict opt-in validation is enabled.
 - Hardened headers (`CSP`, `HSTS`, `X-Frame-Options`, `Referrer-Policy`, etc.).
 
 These defaults are intended to help teams avoid common OWASP Top 10 2025 failure modes around broken access control, cryptographic failures, security misconfiguration, software and data integrity issues, and SSRF.
+
+## Cross-origin resource sharing (CORS)
+
+CORS is **disabled by default**. When enabled it is deny-by-default: only exact origins in `CORS_ALLOWED_ORIGINS` receive CORS response headers, and preflight requests are rejected with `403` unless the requested method and headers are allowed.
+
+```python
+app = Flasgo(
+    settings={
+        "CORS_ENABLED": True,
+        "CORS_ALLOWED_ORIGINS": {"https://app.example.com"},
+        "CORS_ALLOW_CREDENTIALS": True,
+        "CORS_ALLOWED_METHODS": {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+        "CORS_ALLOWED_HEADERS": {"content-type", "authorization", "x-csrf-token"},
+        "CORS_EXPOSE_HEADERS": {"x-total-count"},
+        "CORS_MAX_AGE": 600,
+    }
+)
+```
+
+Behavior notes:
+
+- Origins are matched exactly (`scheme://host[:port]`); entries with paths, query strings, fragments, or embedded credentials are rejected at startup.
+- `CORS_ALLOW_CREDENTIALS=True` echoes the exact requesting origin instead of `*`, and refuses to start if `*` is in the allowlist, because browsers reject credentialed `*` responses.
+- Preflight `OPTIONS` requests are answered with `204` before routing, so they never collide with `405` method handling.
+- CSRF is not bypassed: cross-origin unsafe requests still require a trusted origin in `CSRF_TRUSTED_ORIGINS` plus a valid CSRF token. CORS only controls which responses browsers may read; it does not weaken the CSRF origin check.
 
 ## Rate limiting
 

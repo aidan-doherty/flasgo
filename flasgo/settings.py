@@ -57,6 +57,17 @@ class Settings:
     WEBSOCKET_ALLOW_MISSING_ORIGIN: bool = False
     WEBSOCKET_MAX_MESSAGE_BYTES: int = 65_536
     WEBSOCKET_MAX_MESSAGES_PER_MINUTE: int = 120
+    CORS_ENABLED: bool = False
+    CORS_ALLOWED_ORIGINS: set[str] = field(default_factory=set)
+    CORS_ALLOWED_METHODS: set[str] = field(
+        default_factory=lambda: {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+    )
+    CORS_ALLOWED_HEADERS: set[str] = field(
+        default_factory=lambda: {"content-type", "authorization", "x-csrf-token"}
+    )
+    CORS_EXPOSE_HEADERS: set[str] = field(default_factory=set)
+    CORS_ALLOW_CREDENTIALS: bool = False
+    CORS_MAX_AGE: int = 600
     SERVER_LIMIT_CONCURRENCY: int = 1_000
     METRICS_ENABLED: bool = False
     METRICS_PATH: str = "/metrics"
